@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Define the installation directory
+INSTALL_DIR="/usr/local/bin"
+
+# Install wp-deploy commands
+echo "🔗 Creating symlinks in $INSTALL_DIR..."
+SCRIPT_NAME="$(basename "$0")"
+IGNORE_LIST=("$SCRIPT_NAME" "wp-deploy.ini"  "wp-deploy.ini.sample") 
+for cmd in *; do
+  if [[ " ${IGNORE_LIST[@]} " =~ " $cmd " ]]; then
+    continue
+  fi
+
+  if [ -f "$cmd" ]; then
+    sudo ln -sf "$PWD/$cmd" "$INSTALL_DIR/$cmd"
+    sudo chmod +x "$INSTALL_DIR/$cmd"
+    echo "✅ Linked $cmd to $INSTALL_DIR/$cmd"
+  else
+    echo "❌ Skipping: $cmd is not a file."
+  fi
+done
+
+echo "🚀 Installation complete! You can now run wp-deploy commands from anywhere."

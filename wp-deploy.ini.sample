@@ -1,0 +1,11 @@
+REMOTE_SERVER="remote-server-name"
+DB_NAME=wpdb
+DB_USER=root
+DB_PASSWORD=12345
+
+# Do not change this unless you know what you are doing
+REMOTE_USER=$(ssh -G "${REMOTE_SERVER}" | awk '/user / {print $2}')
+REMOTE_PATH=/home/${REMOTE_USER}/project
+BACKUP_DIR=./backups
+DB_CONTAINER_NAME=db
+DB_HOST=${DB_CONTAINER_NAME}

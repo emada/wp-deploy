@@ -1,0 +1,169 @@
+#!/bin/bash
+
+# Load database configuration from config file
+if [ -f ./wp-deploy.ini ]; then
+  source ./wp-deploy.ini
+else
+  echo "❌ Error: Configuration file 'wp-deploy.ini' not found in the project root directory!"
+  exit 1
+fi
+
+# Create a database backup
+backup_database() {
+  TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+  BACKUP_FILE="$BACKUP_DIR/db_backup_$TIMESTAMP.sql"
+
+  # Ensure the backup directory exists
+  mkdir -p "$BACKUP_DIR"
+
+  echo "🔄 Creating database backup..."
+  # docker exec -i "$DB_CONTAINER_NAME" mysqldump -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > "$BACKUP_FILE"
+  docker compose exec -T "$DB_CONTAINER_NAME" mysqldump -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > "$BACKUP_FILE"
+
+  if [ $? -eq 0 ]; then
+    echo "✅ Backup successful: $BACKUP_FILE"
+  else
+    echo "❌ Backup failed!"
+    exit 1
+  fi
+}
+
+# Restore a database from backup
+restore_database() {
+  if [ -z "$1" ]; then
+    BACKUP_FILE=$(ls -t "$BACKUP_DIR/db_backup_*.sql" | head -n 1)
+  else
+    BACKUP_FILE="$1"
+  fi
+
+  if [ ! -f "$BACKUP_FILE" ]; then
+    echo "❌ Backup file not found: $BACKUP_FILE"
+    exit 1
+  fi
+
+  echo "⚠️  WARNING: This will overwrite the existing database!"
+  read -p "Are you sure you want to restore from $BACKUP_FILE? (y/N): " CONFIRM
+  if [[ "$CONFIRM" != "y" ]]; then
+    echo "🚫 Restore cancelled."
+    exit 1
+  fi
+
+  echo "🔄 Restoring database from $BACKUP_FILE..."
+  # docker exec -i "$DB_CONTAINER_NAME" mysql -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$BACKUP_FILE"
+  docker compose exec -T "$DB_CONTAINER_NAME" mysql -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$BACKUP_FILE"
+
+  if [ $? -eq 0 ]; then
+    echo "✅ Database restore successful!"
+  else
+    echo "❌ Database restore failed!"
+    exit 1
+  fi
+}
+
+# Validate Remote Server Name and Get User/Home Directory
+get_remote_server() {
+  if [ -z "$1" ]; then
+    echo "❌ Error: Please provide the remote server name (as configured in SSH)."
+    echo "Usage: $0 <remote_server_name>"
+    exit 1
+  fi
+
+  local remote_server="$1"
+  local remote_user
+  remote_user=$(ssh -G "$remote_server" | awk '/user / {print $2}')
+
+  if [ -z "$remote_user" ]; then
+    echo "❌ Error: Could not determine remote user for $remote_server."
+    exit 1
+  fi
+
+  local remote_home="/home/$remote_user"
+  
+  # Return values
+  echo "$remote_server" "$remote_home"
+}
+
+# Confirm Action Before Proceeding
+confirm_action() {
+  local message="$1"
+  echo "⚠️  WARNING: $message"
+  read -p "Are you sure you want to continue? (y/N): " CONFIRM
+  if [[ "$CONFIRM" != "y" ]]; then
+    echo "🚫 Operation cancelled."
+    exit 1
+  fi
+}
+
+# Sync Database Using Rsync
+sync_database() {
+  local remote_server="$1"
+  local remote_path="$2"
+  local local_path="$3"
+
+  echo "🔄 Backing up remote database..."
+  ssh "$remote_server" "cd $remote_path && ./db-backup"
+
+  echo "⬇️ Downloading latest database backup..."
+  rsync -avz --progress "$remote_server:$remote_path/backups/db_backup_*.sql" "$local_path/"
+
+  # Get the latest backup file
+  LATEST_BACKUP=$(ls -t "$local_path/db_backup_*.sql" | head -n 1)
+
+  echo "💾 Restoring database locally from $LATEST_BACKUP..."
+  ./db-restore "$LATEST_BACKUP"
+}
+
+# Upload and Restore Database on Remote Server
+deploy_database() {
+  local remote_server="$1"
+  local remote_path="$2"
+  local local_path="$3"
+  local is_first_deploy="$4"
+
+  if [ -z "$is_first_deploy" ]; then
+    is_first_deploy=false
+  fi
+
+  echo "🔄 Creating a local database backup before pushing..."
+  ./db-backup
+
+  # Find the latest backup file
+  LATEST_BACKUP=$(ls -t ${local_path}/db_backup_*.sql | head -n 1)
+
+  if [ -z "$LATEST_BACKUP" ]; then
+    echo "Backup $LATEST_BACKUP created with success"
+  else
+    echo "❌ Error: Couldn't create the database backup file!"
+    exit 1
+  fi
+
+  echo "⬆️ Uploading database backup to '$remote_server'..."
+  rsync -avz --progress "$LATEST_BACKUP" "$remote_server:$remote_path/backups/"
+
+  if [ "$is_first_deploy" == "false" ]; then
+    echo "🔄 Backing up remote database before restoring..."
+    ssh "$remote_server" "cd $remote_path && ./db-backup"
+  fi
+
+  echo "💾 Restoring database on '$remote_server'..."
+  ssh "$remote_server" "cd $remote_path && ./db-restore backups/$(basename "$LATEST_BACKUP")"
+}
+
+# Sync WordPress Files Using Rsync
+pull_wordpress_files() {
+  local remote_server="$1"
+  local remote_path="$2"
+
+  echo "🔄 Pulling WordPress files..."
+  rsync -avz --progress "$remote_server:$remote_path/html/" "html/"
+}
+
+# Sync Local WordPress Files to Remote
+deploy_wordpress_files() {
+  local remote_server="$1"
+  local remote_path="$2"
+
+  echo "🔄 Deploying WordPress files to '$remote_server'..."
+  rsync -avz --progress html/ "$remote_server:$remote_path/html/"
+}
+

@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Load shared functions
+source /usr/local/bin/sync-functions
+
+# # Get remote server name and home directory
+# read -r REMOTE_SERVER REMOTE_PATH <<< "$(get_remote_server "$1")"
+
+# Confirm with the user
+confirm_action "This will overwrite the database and files on '$REMOTE_SERVER'."
+
+# Confirm with the user
+confirm_action "Make sure you synced the remote data from the '$REMOTE_SERVER' before doing the modifications."
+
+# Upload and restore database
+deploy_database "$REMOTE_SERVER" "$REMOTE_PATH" "$BACKUP_DIR"
+
+# Sync local WordPress files to remote
+deploy_wordpress_files "$REMOTE_SERVER" "$REMOTE_PATH"
+
+echo "✅ Deployment complete! Production WordPress is now updated with local changes."
+
